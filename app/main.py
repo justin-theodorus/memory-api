@@ -1,11 +1,25 @@
 import uuid
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from app.schemas import MemoryCreate, RelationshipCreate, SearchRequest
 from app.services.embeddings import get_embedding
 from app.services.db import insert_memory, mark_memory_outdated, search_memories
 from app.services.graph import create_memory_node, create_relationship, expand_memory_subgraph
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
+
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],        
+    allow_headers=["*"],        
+)
 
 @app.post("/memories")
 async def create_memory(payload: MemoryCreate):
