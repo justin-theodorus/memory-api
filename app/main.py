@@ -1,9 +1,9 @@
 import uuid
 from fastapi import FastAPI, HTTPException
-from app.schemas import MemoryCreate
+from app.schemas import MemoryCreate, RelationshipCreate
 from app.services.embeddings import get_embedding
-from app.services.db import insert_memory
-from app.services.graph import create_memory_node, verify_connection
+from app.services.db import insert_memory, mark_memory_outdated
+from app.services.graph import create_memory_node, create_relationship
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
 
@@ -29,10 +29,25 @@ async def create_memory(payload: MemoryCreate):
     create_memory_node(str(mem_id), payload.content)
 
     # 4. return
-    return {
-        "id": str(mem_id),
-        "content": payload.content,
-        "metadata": payload.metadata,
-        "version": 1,
-        "status": "active",
-    }
+    return {"id": str(mem_id), "dim": len(embedding)}
+
+@app.post("/memories/{source_id}/extend")
+def extend_memory(source_id: str, body: RelationshipCreate):
+    # assume both nodes exist
+    create_relationship(source_id, body.target_id, "EXTEND")
+    return {"ok": True, "type": "EXTEND", "from": source_id, "to": body.target_id}
+
+
+@app.post("/memories/{source_id}/update")
+def update_memory(source_id: str, body: RelationshipCreate):
+    # create the relation in Neo4j
+    create_relationship(source_id, body.target_id, "UPDATE")
+    # mark source as outdated in Supabase
+    mark_memory_outdated(source_id)
+    return {"ok": True, "type": "UPDATE", "from": source_id, "to": body.target_id}
+
+
+@app.post("/memories/{source_id}/derive")
+def derive_memory(source_id: str, body: RelationshipCreate):
+    create_relationship(source_id, body.target_id, "DERIVE")
+    return {"ok": True, "type": "DERIVE", "from": source_id, "to": body.target_id}

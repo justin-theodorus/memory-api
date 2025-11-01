@@ -35,3 +35,23 @@ def create_memory_node(mem_id: str, content: str, version: int = 1, status: str 
             version=version,
             status=status,
         )
+def create_relationship(source_id: str, target_id: str, rel_type: str):
+    """
+    rel_type: "UPDATE" | "EXTEND" | "DERIVE"
+    """
+    cypher = f"""
+    MATCH (a:Memory {{id: $source_id}}),
+          (b:Memory {{id: $target_id}})
+    MERGE (a)-[r:{rel_type}]->(b)
+    SET r.created_at = datetime()
+    """
+    try:
+        with driver.session() as session:
+            session.run(
+                cypher,
+                source_id=source_id,
+                target_id=target_id,
+            )
+        print(f"[NEO4J] created {rel_type} between {source_id} -> {target_id}")
+    except Exception as e:
+        print(f"[NEO4J ERROR create_relationship {rel_type}]", repr(e))

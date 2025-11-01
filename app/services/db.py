@@ -20,3 +20,8 @@ def insert_memory(id_, content, embedding, metadata=None):
     resp = supabase.table("memories").insert(data).execute()
     #print("[SUPABASE INSERT]", resp)
     return resp
+
+def mark_memory_outdated(id_: str):
+    res = supabase.table("memories").update({"status": "outdated"}).eq("id", id_).execute()
+    print("[SUPABASE UPDATE status=outdated]", res)
+    return res
