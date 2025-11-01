@@ -1,9 +1,9 @@
 import uuid
 from fastapi import FastAPI, HTTPException
-from app.schemas import MemoryCreate, RelationshipCreate
+from app.schemas import MemoryCreate, RelationshipCreate, SearchRequest
 from app.services.embeddings import get_embedding
-from app.services.db import insert_memory, mark_memory_outdated
-from app.services.graph import create_memory_node, create_relationship
+from app.services.db import insert_memory, mark_memory_outdated, search_memories
+from app.services.graph import create_memory_node, create_relationship, expand_memory_subgraph
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
 
@@ -51,3 +51,27 @@ def update_memory(source_id: str, body: RelationshipCreate):
 def derive_memory(source_id: str, body: RelationshipCreate):
     create_relationship(source_id, body.target_id, "DERIVE")
     return {"ok": True, "type": "DERIVE", "from": source_id, "to": body.target_id}
+
+@app.post("/search")
+async def search_memories_endpoint(payload: SearchRequest):
+    # 1) embed the query
+    query_emb = await get_embedding(payload.query)
+
+    # 2) hit Supabase RPC
+    matches = search_memories(
+        query_embedding=query_emb,
+        k=payload.k,
+        similarity_threshold=payload.similarity_threshold,
+    )
+
+    # 3) expand each result in Neo4j
+    graph = {}
+    if payload.with_graph and matches:
+        ids = [row["id"] for row in matches]
+        graph = expand_memory_subgraph(ids)
+
+    return {
+        "query": payload.query,
+        "results": matches,
+        "graph": graph,
+    }

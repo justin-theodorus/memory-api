@@ -8,3 +8,9 @@ class MemoryCreate(BaseModel):
 class RelationshipCreate(BaseModel):
     target_id: str       
     metadata: dict | None = None
+
+class SearchRequest(BaseModel):
+    query: str
+    k: int = 5
+    similarity_threshold: float = 0.0
+    with_graph: bool = True

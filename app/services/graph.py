@@ -35,6 +35,7 @@ def create_memory_node(mem_id: str, content: str, version: int = 1, status: str 
             version=version,
             status=status,
         )
+    
 def create_relationship(source_id: str, target_id: str, rel_type: str):
     """
     rel_type: "UPDATE" | "EXTEND" | "DERIVE"
@@ -55,3 +56,67 @@ def create_relationship(source_id: str, target_id: str, rel_type: str):
         print(f"[NEO4J] created {rel_type} between {source_id} -> {target_id}")
     except Exception as e:
         print(f"[NEO4J ERROR create_relationship {rel_type}]", repr(e))
+
+def expand_memory_subgraph(memory_ids: list[str], depth: int = 2):
+    if not memory_ids:
+        print("[NEO4J expand] empty id list")
+        return {}
+
+    # build the variable-length pattern
+    rel_pattern = f"[r:UPDATE|EXTEND|DERIVE*1..{depth}]"
+
+    query = f"""
+    MATCH (m:Memory)
+    WHERE m.id IN $ids
+    OPTIONAL MATCH p = (m)-{rel_pattern}-(n:Memory)
+    WITH collect(DISTINCT m) + collect(DISTINCT n) AS nodes,
+         [path IN collect(p) WHERE path IS NOT NULL] AS paths
+    WITH nodes,
+         reduce(allrels = [], path IN paths |
+                allrels + relationships(path)) AS rels
+    RETURN nodes, rels
+    """
+
+    try:
+        print("[NEO4J expand] querying for ids:", memory_ids)
+        with driver.session() as session:
+            rec = session.run(query, ids=memory_ids).single()
+            if not rec:
+                print("[NEO4J expand] no record")
+                return {}
+
+            raw_nodes = rec["nodes"] or []
+            raw_rels = rec["rels"] or []
+            print(f"[NEO4J expand] got {len(raw_nodes)} nodes and {len(raw_rels)} rels")
+
+            
+            nodes = []
+            internal_to_uuid = {}
+            for n in raw_nodes:
+                if not n:
+                    continue
+                uuid = n.get("id") 
+                internal_to_uuid[n.id] = uuid
+                nodes.append({
+                    "id": uuid,
+                    "content": n.get("content"),
+                    "status": n.get("status"),
+                    "version": n.get("version"),
+                })
+
+            edges = []
+            for r in raw_rels:
+                if not r:
+                    continue
+                start_internal = r.start_node.id
+                end_internal = r.end_node.id
+                edges.append({
+                    "from": internal_to_uuid.get(start_internal, start_internal),
+                    "to": internal_to_uuid.get(end_internal, end_internal),
+                    "type": r.type,   # "EXTEND" / "UPDATE" / "DERIVE"
+                })
+
+            return {"nodes": nodes, "edges": edges}
+    except Exception as e:
+        print("[NEO4J expand ERROR]", repr(e))
+        return {}

@@ -25,3 +25,21 @@ def mark_memory_outdated(id_: str):
     res = supabase.table("memories").update({"status": "outdated"}).eq("id", id_).execute()
     print("[SUPABASE UPDATE status=outdated]", res)
     return res
+
+def search_memories(query_embedding: list[float], k: int = 5, similarity_threshold: float = 0.0):
+    """
+    Calls the Postgres function match_memories(...)
+    """
+    resp = supabase.rpc(
+        "match_memories",
+        {
+            "query_embedding": query_embedding,
+            "match_count": k,
+            "similarity_threshold": similarity_threshold,
+        },
+    ).execute()
+
+    # supabase-py returns .data
+    data = resp.data or []
+    print("[SUPABASE SEARCH]", data)
+    return data
