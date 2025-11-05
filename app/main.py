@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.schemas import MemoryCreate, RelationshipCreate, SearchRequest
 from app.services.embeddings import get_embedding
-from app.services.db import insert_memory, mark_memory_outdated, search_memories
+from app.services.db import insert_memory, mark_memory_outdated, search_memories, get_memory_by_id
 from app.services.graph import create_memory_node, create_relationship, expand_memory_subgraph
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
@@ -65,6 +65,21 @@ def update_memory(source_id: str, body: RelationshipCreate):
 def derive_memory(source_id: str, body: RelationshipCreate):
     create_relationship(source_id, body.target_id, "DERIVE")
     return {"ok": True, "type": "DERIVE", "from": source_id, "to": body.target_id}
+
+@app.get("/memories/{memory_id}")
+async def get_memory(memory_id: str, depth: int = 2):
+    # 1) fetch base memory from Supabase
+    mem = get_memory_by_id(memory_id)
+    if not mem:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    # 2) fetch small subgraph around it
+    g = expand_memory_subgraph([memory_id], depth=depth)
+
+    return {
+        "memory": mem,
+        "graph": g,
+    }
 
 @app.post("/search")
 async def search_memories_endpoint(payload: SearchRequest):

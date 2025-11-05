@@ -87,15 +87,24 @@ def expand_memory_subgraph(memory_ids: list[str], depth: int = 2):
 
             raw_nodes = rec["nodes"] or []
             raw_rels = rec["rels"] or []
-            print(f"[NEO4J expand] got {len(raw_nodes)} nodes and {len(raw_rels)} rels")
+            print(f"[NEO4J expand] got {len(raw_nodes)} raw nodes and {len(raw_rels)} rels")
 
             
             nodes = []
             internal_to_uuid = {}
+            seen_node_uuids = set()  # Deduplicate nodes by UUID
             for n in raw_nodes:
                 if not n:
                     continue
-                uuid = n.get("id") 
+                uuid = n.get("id")
+                
+                # Skip if we've already processed this node
+                if uuid in seen_node_uuids:
+                    # Still map internal ID for relationship processing
+                    internal_to_uuid[n.id] = uuid
+                    continue
+                    
+                seen_node_uuids.add(uuid)
                 internal_to_uuid[n.id] = uuid
                 nodes.append({
                     "id": uuid,
@@ -105,9 +114,15 @@ def expand_memory_subgraph(memory_ids: list[str], depth: int = 2):
                 })
 
             edges = []
+            seen_rel_ids = set()
             for r in raw_rels:
                 if not r:
                     continue
+                # Deduplicate by relationship ID (bidirectional match causes duplicates)
+                if r.id in seen_rel_ids:
+                    continue
+                seen_rel_ids.add(r.id)
+                
                 start_internal = r.start_node.id
                 end_internal = r.end_node.id
                 edges.append({
@@ -116,7 +131,11 @@ def expand_memory_subgraph(memory_ids: list[str], depth: int = 2):
                     "type": r.type,   # "EXTEND" / "UPDATE" / "DERIVE"
                 })
 
-            return {"nodes": nodes, "edges": edges}
+            print(f"[NEO4J expand] returning {len(nodes)} unique nodes and {len(edges)} edges")
+            return {
+                "nodes": nodes or [],
+                "edges": edges or [],
+            }
     except Exception as e:
         print("[NEO4J expand ERROR]", repr(e))
         return {}

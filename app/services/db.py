@@ -43,3 +43,9 @@ def search_memories(query_embedding: list[float], k: int = 5, similarity_thresho
     data = resp.data or []
     print("[SUPABASE SEARCH]", data)
     return data
+
+def get_memory_by_id(mem_id: str):
+    res = supabase.table("memories").select("*").eq("id", mem_id).limit(1).execute()
+    if res.data:
+        return res.data[0]
+    return None

@@ -1,79 +1,94 @@
 "use client";
 
 import { useState } from "react";
-import { searchMemories } from "@/lib/api";
-import GraphView from "./GraphView";
 
-export default function SearchForm() {
-  const [query, setQuery] = useState("tariff update 2024");
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
+
+export type MemorySearchResult = {
+  id: string;
+  content: string;
+  metadata: any;
+  similarity: number;
+};
+
+export type MemoryGraph = {
+  nodes?: Array<{
+    id: string;
+    content?: string;
+    status?: string;
+    version?: number;
+  }>;
+  edges?: Array<{
+    id?: string;
+    from: string;
+    to: string;
+    type?: string;
+  }>;
+};
+
+export type SearchResponse = {
+  query: string;
+  results: MemorySearchResult[];
+  graph?: MemoryGraph;
+};
+
+type SearchFormProps = {
+  onSearchComplete?: (payload: SearchResponse) => void;
+};
+
+export default function SearchForm({ onSearchComplete }: SearchFormProps) {
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function onSearch(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
     try {
-      const data = await searchMemories(query, true);
-      setResult(data);
+      const res = await fetch(`${API_BASE}/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query,
+          k: 5,
+          with_graph: true,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Request failed: ${res.status}`);
+      }
+
+      const data: SearchResponse = await res.json();
+      onSearchComplete?.(data);
     } catch (err: any) {
-      setError(err.message);
+      console.error(err);
+      setError(err.message ?? "Something went wrong");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="p-4 border rounded-xl bg-white/80 backdrop-blur space-y-3">
-      <h2 className="text-lg font-semibold">Search memories</h2>
-      <form onSubmit={onSearch} className="flex gap-2">
-        <input
-            className="flex-1 border rounded px-2 py-1 text-sm"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="search text..."
-        />
-        <button
-          disabled={loading}
-          className="px-3 py-1 rounded bg-slate-800 text-white text-sm disabled:opacity-50"
-        >
-          {loading ? "Searching..." : "Search"}
-        </button>
-      </form>
-      {error && <p className="text-sm text-red-500">{error}</p>}
-      {result && (
-        <div className="space-y-3">
-          <div>
-            <h3 className="font-medium text-sm mb-1">Results</h3>
-            <ul className="space-y-1">
-              {result.results?.map((r: any) => (
-                <li key={r.id} className="text-sm border rounded p-2 bg-slate-50">
-                  <div className="font-mono text-xs text-slate-500">{r.id}</div>
-                  <div>{r.content}</div>
-                  <div className="text-xs text-slate-500">
-                    similarity: {r.similarity?.toFixed(3)}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* graph */}
-          <div>
-            <h3 className="font-medium text-sm mb-1">Graph</h3>
-            <GraphView data={result.graph} />
-          </div>
-
-          {/* raw */}
-          <details className="text-xs">
-            <summary className="cursor-pointer">Raw JSON</summary>
-            <pre className="bg-slate-100 p-2 rounded max-h-60 overflow-auto text-xs">
-              {JSON.stringify(result, null, 2)}
-            </pre>
-          </details>
-        </div>
-      )}
-    </div>
+    <form onSubmit={handleSubmit} className="flex gap-2 mb-4">
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search memories…"
+        className="flex-1 border rounded px-3 py-2"
+      />
+      <button
+        type="submit"
+        disabled={loading}
+        className="bg-slate-900 text-white px-4 py-2 rounded"
+      >
+        {loading ? "Searching..." : "Search"}
+      </button>
+      {error ? <p className="text-red-500 text-sm">{error}</p> : null}
+    </form>
   );
 }
