@@ -283,3 +283,87 @@ def fetch_timeline(limit: int = 100, status: Optional[str] = None) -> List[Dict[
     with driver.session() as session:
         result = session.run(cypher, {"limit": limit, "status": status})
         return [r.data() for r in result]
+
+def create_link(from_id: str, to_id: str, rel_type: str):
+    cypher = f"""
+    MATCH (a:Memory {{id:$from}}), (b:Memory {{id:$to}})
+    MERGE (a)-[r:{rel_type}]->(b)
+    SET r.created_at = datetime()
+    RETURN type(r) as type
+    """
+    with driver.session() as s:
+        s.run(cypher, {"from": from_id, "to": to_id})
+
+def merge_duplicate_nodes(source_id: str, target_id: str):
+    """
+    Merges source node into target node, keeping target's ID.
+    Transfers all relationships from source to target, then deletes source.
+    Uses multiple queries for clarity and reliability.
+    """
+    with driver.session() as session:
+        # First, verify both nodes exist
+        verify = session.run("""
+            MATCH (s:Memory {id:$src})
+            MATCH (t:Memory {id:$tgt})
+            RETURN s.id AS s_id, t.id AS t_id
+        """, {"src": source_id, "tgt": target_id}).single()
+        
+        if not verify:
+            return {"ok": False, "error": "One or both nodes not found"}
+        
+        # Transfer outgoing UPDATE relationships
+        session.run("""
+            MATCH (s:Memory {id:$src})-[r:UPDATE]->(other)
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (t)-[:UPDATE]->(other)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Transfer outgoing EXTEND relationships  
+        session.run("""
+            MATCH (s:Memory {id:$src})-[r:EXTEND]->(other)
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (t)-[:EXTEND]->(other)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Transfer outgoing DERIVE relationships
+        session.run("""
+            MATCH (s:Memory {id:$src})-[r:DERIVE]->(other)
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (t)-[:DERIVE]->(other)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Transfer incoming UPDATE relationships
+        session.run("""
+            MATCH (other)-[r:UPDATE]->(s:Memory {id:$src})
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (other)-[:UPDATE]->(t)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Transfer incoming EXTEND relationships
+        session.run("""
+            MATCH (other)-[r:EXTEND]->(s:Memory {id:$src})
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (other)-[:EXTEND]->(t)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Transfer incoming DERIVE relationships
+        session.run("""
+            MATCH (other)-[r:DERIVE]->(s:Memory {id:$src})
+            MATCH (t:Memory {id:$tgt})
+            WHERE other <> t
+            MERGE (other)-[:DERIVE]->(t)
+        """, {"src": source_id, "tgt": target_id})
+        
+        # Finally, delete source node
+        session.run("""
+            MATCH (s:Memory {id:$src})
+            DETACH DELETE s
+        """, {"src": source_id})
+        
+        return {"ok": True, "kept": target_id}
+

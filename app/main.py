@@ -5,6 +5,7 @@ from app.schemas import *
 from app.services.embeddings import get_embedding
 from app.services.db import insert_memory, mark_memory_outdated, search_memories, get_memory_by_id
 from app.services.graph import *
+from app.services.suggest import suggest_links_for
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
 
@@ -162,3 +163,24 @@ def get_lineage(id: str):
 @app.get("/timeline")
 def global_timeline(limit: int = 100, status: str | None = None):
     return fetch_timeline(limit, status)
+
+@app.post("/memories/{id}/suggest")
+def suggest_links(id: str):
+    return {"suggestions": suggest_links_for(id)}
+
+@app.post("/graph/links")
+def apply_link(payload: dict):
+    t = payload.get("type")
+    if t not in ("EXTEND", "DERIVE"):
+        raise HTTPException(400, "type must be EXTEND or DERIVE")
+    create_link(payload["from"], payload["to"], t)
+    return {"ok": True}
+
+@app.post("/memories/merge")
+def merge(payload: dict):
+    src = payload["source_id"]
+    tgt = payload["target_id"]
+    if src == tgt:
+        raise HTTPException(400, "source and target must differ")
+    res = merge_duplicate_nodes(src, tgt)
+    return res

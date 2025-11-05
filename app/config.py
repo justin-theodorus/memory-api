@@ -20,7 +20,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    auto_dup_thresh: float = 0.92
+    auto_ext_thresh: float = 0.85
+    auto_der_thresh: float = 0.75
+    auto_max_suggestions: int = 5
+
 settings = Settings()
 
-print("[CONFIG DEBUG] supabase_url =", repr(settings.supabase_url))
-print("[CONFIG DEBUG] neo4j_uri =", repr(settings.neo4j_uri))

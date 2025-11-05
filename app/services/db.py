@@ -26,7 +26,7 @@ def mark_memory_outdated(id_: str):
     print("[SUPABASE UPDATE status=outdated]", res)
     return res
 
-def search_memories(query_embedding: list[float], k: int = 5, similarity_threshold: float = 0.0):
+def search_memories(query_embedding: list[float], k: int = 5, similarity_threshold: float = 0.0, exclude_id: str = None):
     """
     Calls the Postgres function match_memories(...)
     """
@@ -41,6 +41,11 @@ def search_memories(query_embedding: list[float], k: int = 5, similarity_thresho
 
     # supabase-py returns .data
     data = resp.data or []
+    
+    # Filter out excluded ID if provided
+    if exclude_id:
+        data = [row for row in data if row.get("id") != exclude_id]
+    
     print("[SUPABASE SEARCH]", data)
     return data
 
