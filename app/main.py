@@ -1,10 +1,10 @@
 import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from app.schemas import MemoryCreate, RelationshipCreate, SearchRequest
+from app.schemas import *
 from app.services.embeddings import get_embedding
 from app.services.db import insert_memory, mark_memory_outdated, search_memories, get_memory_by_id
-from app.services.graph import create_memory_node, create_relationship, expand_memory_subgraph
+from app.services.graph import *
 
 app = FastAPI(title="Memory Platform", version="0.1.0")
 
@@ -104,3 +104,61 @@ async def search_memories_endpoint(payload: SearchRequest):
         "results": matches,
         "graph": graph,
     }
+
+@app.post("/memories/{id}/supersede")
+async def supersede_memory(id: str, body: SupersedeRequest):
+    new_id = str(uuid.uuid4())
+
+    # 1) Neo4j: atomically set old->outdated, create new node, and :UPDATE edge
+    g = supersede_version(old_id=id, new_id=new_id, content=body.content)
+    if not g:
+        raise HTTPException(404, "old memory not found")
+    new_version = g["new"]["version"] 
+
+    # 2) Embedding for the new content
+    emb = await get_embedding(body.content) 
+
+    # 3) Supabase: insert the new version row
+    insert_memory(
+        id_=new_id,
+        content=body.content,
+        embedding=emb,       
+        metadata={"op": "UPDATE", "from": id},
+    )
+
+    # 4) Supabase: mark old row outdated
+    mark_memory_outdated(id)
+
+    return {"ok": True, "new_id": new_id}
+
+@app.post("/memories/{id}/extend-to/{target_id}")
+def extend_memory_to(id: str, target_id: str):
+    try:
+        return {"ok": True, **create_extend(id, target_id)}
+    except Exception as e:
+        raise HTTPException(500, f"extend failed: {e}")
+
+@app.post("/memories/{id}/derive-new")
+async def derive_memory_new(id: str, body: SupersedeRequest):
+    new_id = str(uuid.uuid4())
+    try:
+        graph_res = create_derive(id, new_id, body.content)
+        # Also write new node to Supabase
+        emb = await get_embedding(body.content)
+        insert_memory(
+            id_=new_id,
+            content=body.content,
+            embedding=emb,
+            metadata={"op": "DERIVE", "from": id},
+        )
+        return {"ok": True, "new_id": new_id, "graph": graph_res}
+    except Exception as e:
+        raise HTTPException(500, f"derive failed: {e}")
+
+@app.get("/memories/{id}/lineage")
+def get_lineage(id: str):
+    return fetch_lineage(id)
+
+@app.get("/timeline")
+def global_timeline(limit: int = 100, status: str | None = None):
+    return fetch_timeline(limit, status)

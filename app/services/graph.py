@@ -1,8 +1,8 @@
 from neo4j import GraphDatabase
 from app.config import settings
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-#print(f"[NEO4J] Connecting to: {settings.neo4j_uri}")
-#print(f"[NEO4J] User: {settings.neo4j_user}")
 
 driver = GraphDatabase.driver(
     settings.neo4j_uri,
@@ -139,3 +139,147 @@ def expand_memory_subgraph(memory_ids: list[str], depth: int = 2):
     except Exception as e:
         print("[NEO4J expand ERROR]", repr(e))
         return {}
+
+def supersede_version(old_id: str, new_id: str, content: str) -> Dict[str, Any]:
+    """
+    - Marks old memory as 'outdated'
+    - Creates (or updates) new memory with version = old.version + 1
+    - Creates :UPDATE edge old -> new
+    """
+    now = datetime.utcnow().isoformat()
+
+    cypher = """
+    MATCH (old:Memory {id: $old_id})
+    SET   old.status = 'outdated'
+    WITH old
+
+    MERGE (new:Memory {id: $new_id})
+      ON CREATE SET
+        new.content    = $content,
+        new.status     = 'active',
+        new.version    = coalesce(old.version, 1) + 1,
+        new.created_at = datetime($now)
+      ON MATCH SET
+        new.content    = $content
+
+    MERGE (old)-[r:UPDATE]->(new)
+      ON CREATE SET r.at = datetime($now)
+
+    RETURN
+      old { .id, .status, .version } AS old,
+      new { .id, .status, .version, .content } AS new,
+      type(r) AS rel_type, r.at AS at
+    """
+    with driver.session() as session:
+        rec = session.run(cypher, {
+            "old_id": old_id,
+            "new_id": new_id,
+            "content": content,
+            "now": now,
+        }).single()
+
+    return rec.data() if rec else {}
+
+
+# ---------- EXTEND (a -> b) ----------
+def create_extend(old_id: str, new_id: str) -> Dict[str, Any]:
+    """
+    Creates an :EXTEND edge old -> new (assumes nodes already exist).
+    """
+    now = datetime.utcnow().isoformat()
+    cypher = """
+    MATCH (a:Memory {id: $old_id}), (b:Memory {id: $new_id})
+    MERGE (a)-[r:EXTEND]->(b)
+      ON CREATE SET r.at = datetime($now)
+    RETURN type(r) AS rel_type, r.at AS at,
+           startNode(r).id AS from_id, endNode(r).id AS to_id
+    """
+    with driver.session() as session:
+        rec = session.run(cypher, {"old_id": old_id, "new_id": new_id, "now": now}).single()
+    return rec.data() if rec else {}
+
+
+# ---------- DERIVE (base -> derived) ----------
+def create_derive(base_id: str, derived_id: str, content: str) -> Dict[str, Any]:
+    """
+    Create a new derived node and connect with :DERIVE.
+    """
+    now = datetime.utcnow().isoformat()
+    cypher = """
+    MATCH (base:Memory {id: $base_id})
+    MERGE (d:Memory {id: $derived_id})
+      ON CREATE SET
+        d.content    = $content,
+        d.status     = 'active',
+        d.version    = 1,
+        d.created_at = datetime($now)
+      ON MATCH SET
+        d.content    = $content
+
+    MERGE (base)-[r:DERIVE]->(d)
+      ON CREATE SET r.at = datetime($now)
+
+    RETURN
+      base { .id } AS base,
+      d    { .id, .status, .version, .content } AS derived,
+      type(r) AS rel_type, r.at AS at
+    """
+    with driver.session() as session:
+        rec = session.run(cypher, {
+            "base_id": base_id,
+            "derived_id": derived_id,
+            "content": content,
+            "now": now
+        }).single()
+    return rec.data() if rec else {}
+
+
+# ---------- LINEAGE (ordered edge hops from a root) ----------
+def fetch_lineage(root_id: str, max_hops: int = 8) -> List[Dict[str, Any]]:
+    """
+    Returns chronologically ordered hops from `root_id`.
+    No APOC; flatten relationships with reduce(...).
+    """
+    cypher = f"""
+    MATCH (root:Memory {{id: $id}})
+    OPTIONAL MATCH p = (root)-[r:UPDATE|EXTEND|DERIVE*1..{max_hops}]->(n:Memory)
+    WITH collect(p) AS paths
+    WITH reduce(all = [], p IN paths | all + relationships(p)) AS rels
+    UNWIND rels AS rel
+    RETURN
+      type(rel)         AS op,
+      rel.at            AS at,
+      startNode(rel).id AS from_id,
+      endNode(rel).id   AS to_id
+    ORDER BY at
+    """
+    with driver.session() as session:
+        result = session.run(cypher, {"id": root_id})
+        return [r.data() for r in result]
+
+
+# ---------- GLOBAL TIMELINE (newest first) ----------
+def fetch_timeline(limit: int = 100, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Mixed feed of node creates and relationship events.
+    """
+    cypher = """
+    MATCH (m:Memory)
+    WHERE $status IS NULL OR m.status = $status
+    OPTIONAL MATCH (m)-[r:UPDATE|EXTEND|DERIVE]->(n)
+    WITH m, r, coalesce(r.at, m.created_at) AS t
+    ORDER BY t DESC
+    LIMIT $limit
+    RETURN
+      m.id      AS id,
+      m.content AS content,
+      m.status  AS status,
+      m.version AS version,
+      t         AS at,
+      type(r)   AS op,
+      CASE WHEN r IS NULL THEN NULL ELSE startNode(r).id END AS from_id,
+      CASE WHEN r IS NULL THEN NULL ELSE endNode(r).id   END AS to_id
+    """
+    with driver.session() as session:
+        result = session.run(cypher, {"limit": limit, "status": status})
+        return [r.data() for r in result]
