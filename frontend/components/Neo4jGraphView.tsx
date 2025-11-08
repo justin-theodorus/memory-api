@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useCallback, useRef, useState } from 'react'
+import React, { useCallback, useRef, useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 
 // Dynamically import ForceGraph2D to avoid SSR issues (window is not defined)
@@ -49,6 +49,7 @@ type GraphLink = {
 const Neo4jGraphView: React.FC<Props> = ({ nodes, edges, onNodeClick }) => {
   const fgRef = useRef<any>(null)
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
 
   // Transform data for react-force-graph
   const graphData = {
@@ -62,40 +63,71 @@ const Neo4jGraphView: React.FC<Props> = ({ nodes, edges, onNodeClick }) => {
       })),
   }
 
+  // Warm up the simulation for better initial layout
+  useEffect(() => {
+    if (fgRef.current) {
+      // Set initial zoom level
+      fgRef.current.zoom(1.2)
+      
+      // Run simulation to stabilize the layout
+      fgRef.current.d3Force('charge')?.strength(-300) // Increased repulsion
+      fgRef.current.d3Force('link')?.distance(80) // Closer links
+      fgRef.current.d3Force('center')?.strength(0.5)
+    }
+  }, [nodes.length])
+
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
       onNodeClick?.(node)
-      // Zoom to node
-      if (fgRef.current) {
-        fgRef.current.centerAt(node.x, node.y, 1000)
-        fgRef.current.zoom(2, 1000)
+      // Center on node without zooming (removed the zoom call that was causing issues)
+      if (fgRef.current && node.x && node.y) {
+        fgRef.current.centerAt(node.x, node.y, 800)
       }
     },
     [onNodeClick]
   )
 
-  const handleNodeHover = useCallback((node: GraphNode | null) => {
+  const handleNodeHover = useCallback((node: GraphNode | null, prevNode: GraphNode | null) => {
     setHoveredNode(node)
+    
+    // Update tooltip position based on canvas coordinates
+    if (node && fgRef.current) {
+      const coords = fgRef.current.graph2ScreenCoords(node.x, node.y)
+      if (coords) {
+        setTooltipPos({ x: coords.x, y: coords.y })
+      }
+    } else {
+      setTooltipPos(null)
+    }
   }, [])
 
   // Custom node rendering (Neo4j style)
   const paintNode = useCallback(
     (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = node.content?.slice(0, 30) || node.id.slice(0, 8)
-      const fontSize = 12 / globalScale
-      const nodeRadius = 8
+      const label = node.content?.slice(0, 40) || node.id.slice(0, 8)
+      const fontSize = 11 / globalScale
+      const nodeRadius = 12 // Larger nodes for better visibility
 
       // Determine color based on status (Neo4j Bloom style)
       let nodeColor = '#94a3b8' // default gray
       if (node.status === 'ACTIVE' || node.status === 'active') {
         nodeColor = '#06b6d4' // cyan (active)
+      } else if (node.status === 'outdated') {
+        nodeColor = '#71717a' // darker gray for outdated
       }
 
-      // Highlight on hover
+      // Highlight on hover - larger glow effect
       if (hoveredNode?.id === node.id) {
+        // Outer glow
+        ctx.beginPath()
+        ctx.arc(node.x!, node.y!, nodeRadius + 6, 0, 2 * Math.PI)
+        ctx.fillStyle = 'rgba(6, 182, 212, 0.25)'
+        ctx.fill()
+        
+        // Inner glow
         ctx.beginPath()
         ctx.arc(node.x!, node.y!, nodeRadius + 3, 0, 2 * Math.PI)
-        ctx.fillStyle = 'rgba(6, 182, 212, 0.3)'
+        ctx.fillStyle = 'rgba(6, 182, 212, 0.4)'
         ctx.fill()
       }
 
@@ -105,23 +137,23 @@ const Neo4jGraphView: React.FC<Props> = ({ nodes, edges, onNodeClick }) => {
       ctx.fillStyle = nodeColor
       ctx.fill()
 
-      // Node border
-      ctx.strokeStyle = '#0f172a'
-      ctx.lineWidth = 2 / globalScale
+      // Node border - thicker on hover
+      ctx.strokeStyle = hoveredNode?.id === node.id ? '#38bdf8' : '#0f172a'
+      ctx.lineWidth = (hoveredNode?.id === node.id ? 3 : 2) / globalScale
       ctx.stroke()
 
-      // Draw label
+      // Draw label - always visible
       ctx.font = `${fontSize}px Inter, system-ui, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillStyle = '#e2e8f0'
-      ctx.fillText(label, node.x!, node.y! - nodeRadius - 8)
+      ctx.fillText(label, node.x!, node.y! - nodeRadius - 10)
 
       // Draw version badge if exists
       if (node.version) {
-        ctx.font = `${fontSize * 0.7}px Inter, system-ui, sans-serif`
-        ctx.fillStyle = '#64748b'
-        ctx.fillText(`v${node.version}`, node.x!, node.y! + nodeRadius + 8)
+        ctx.font = `${fontSize * 0.75}px Inter, system-ui, sans-serif`
+        ctx.fillStyle = '#94a3b8'
+        ctx.fillText(`v${node.version}`, node.x!, node.y! + nodeRadius + 10)
       }
     },
     [hoveredNode]
@@ -199,48 +231,93 @@ const Neo4jGraphView: React.FC<Props> = ({ nodes, edges, onNodeClick }) => {
         ref={fgRef}
         graphData={graphData}
         nodeId="id"
-        nodeLabel={(node: any) => {
-          const n = node as GraphNode
-          return `${n.content || n.id}\nStatus: ${n.status || 'N/A'}\nVersion: ${n.version || 'N/A'}`
-        }}
+        nodeLabel={() => ''} // Disable default tooltip
         nodeCanvasObject={paintNode as any}
         linkCanvasObject={paintLink as any}
         onNodeClick={handleNodeClick as any}
         onNodeHover={handleNodeHover as any}
         backgroundColor="#020617"
-        linkDirectionalParticles={2}
-        linkDirectionalParticleWidth={2}
-        linkDirectionalParticleSpeed={0.005}
-        d3VelocityDecay={0.3}
+        linkDirectionalParticles={1}
+        linkDirectionalParticleWidth={1.5}
+        linkDirectionalParticleSpeed={0.004}
+        d3VelocityDecay={0.4}
+        d3AlphaDecay={0.02}
+        d3AlphaMin={0.001}
         cooldownTicks={100}
+        warmupTicks={50}
+        enableNodeDrag={true}
+        enableZoomInteraction={true}
+        enablePanInteraction={true}
         onEngineStop={() => {
-          // Fit graph to view after initial layout
+          // Fit graph to view after initial layout with padding
           if (fgRef.current) {
-            fgRef.current.zoomToFit(400, 50)
+            fgRef.current.zoomToFit(400, 80)
           }
         }}
       />
       
-      {/* Info overlay */}
-      <div className="absolute top-2 left-2 bg-slate-900/80 backdrop-blur-sm rounded px-3 py-2 text-xs text-slate-300 border border-slate-700">
-        <div className="font-semibold mb-1">Graph Info</div>
-        <div>Nodes: {nodes.length}</div>
-        <div>Edges: {edges.length}</div>
-        {hoveredNode && (
-          <div className="mt-2 pt-2 border-t border-slate-700">
-            <div className="font-semibold">Hovered:</div>
-            <div className="truncate max-w-[200px]">
-              {hoveredNode.content || hoveredNode.id}
+      {/* Custom Tooltip - Neo4j style */}
+      {hoveredNode && tooltipPos && (
+        <div 
+          className="absolute pointer-events-none z-50 transition-opacity duration-150"
+          style={{
+            left: `${tooltipPos.x}px`,
+            top: `${tooltipPos.y - 60}px`,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className="bg-slate-900/95 backdrop-blur-md rounded-lg px-4 py-3 text-xs text-slate-100 border border-slate-700 shadow-xl max-w-xs">
+            <div className="font-semibold text-sm mb-2 text-cyan-400">
+              {hoveredNode.content?.slice(0, 80) || 'Memory Node'}
+              {hoveredNode.content && hoveredNode.content.length > 80 && '...'}
+            </div>
+            <div className="space-y-1 text-slate-300">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-400">ID:</span>
+                <code className="text-xs bg-slate-800 px-1.5 py-0.5 rounded">
+                  {hoveredNode.id.slice(0, 12)}...
+                </code>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-400">Status:</span>
+                <span className={`text-xs font-medium ${
+                  hoveredNode.status === 'active' ? 'text-cyan-400' : 'text-slate-400'
+                }`}>
+                  {hoveredNode.status || 'N/A'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-400">Version:</span>
+                <span className="text-slate-300">v{hoveredNode.version || 1}</span>
+              </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
+      
+      {/* Info overlay */}
+      <div className="absolute top-2 left-2 bg-slate-900/90 backdrop-blur-sm rounded-lg px-3 py-2 text-xs text-slate-300 border border-slate-700 shadow-lg">
+        <div className="font-semibold mb-1.5 text-cyan-400">Graph Info</div>
+        <div className="space-y-0.5">
+          <div>Nodes: <span className="text-white font-medium">{nodes.length}</span></div>
+          <div>Edges: <span className="text-white font-medium">{edges.length}</span></div>
+        </div>
       </div>
 
       {/* Controls info */}
-      <div className="absolute bottom-2 right-2 bg-slate-900/80 backdrop-blur-sm rounded px-3 py-2 text-xs text-slate-400 border border-slate-700">
-        <div>🖱️ Drag to pan</div>
-        <div>🔍 Scroll to zoom</div>
-        <div>👆 Click node to focus</div>
+      <div className="absolute bottom-2 right-2 bg-slate-900/90 backdrop-blur-sm rounded-lg px-3 py-2 text-xs text-slate-400 border border-slate-700 shadow-lg">
+        <div className="flex items-center gap-1.5">
+          <span>🖱️</span>
+          <span>Drag to pan</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span>🔍</span>
+          <span>Scroll to zoom</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span>👆</span>
+          <span>Click to select</span>
+        </div>
       </div>
     </div>
   )
